@@ -44,6 +44,18 @@ function log() {
 	echo "[*] $*" >&2
 }
 
+# log un message dans stderr, puis quite le programme.
+function bail() {
+	log "$@"
+	exit 0
+}
+
+# Conduct a sanity-check to make sure that GPG provided with the given
+# arguments can sign something. Inability to sign things is not a fatal error.
+function gpg_cansign() {
+	gpg "$@" --clear-sign </dev/null >/dev/null
+}
+
 # Lors de la création de versions, nous devons créer des binaires statiques, 
 # une archive du commit actuel et générer des signatures détachées pour les deux.
 keyid=""
@@ -101,11 +113,20 @@ build_project "$releasedir/$project.$goarch"
 
 # Création de l'archive tar
 git archive --format=tar --prefix="$project-$version/" "$commit" | xz >"$releasedir/$project.tar.xz"
-git archive --format=tar --prefix="$project-$version/" "$commit" 
 
 # Génère une clef somme de contrôle sha256 de l'archive
 (
 	cd "$releasedir"
 	"$hashcmd" "$project".{"$goarch",tar.xz} >"$project.$hashcmd"
 )
-echo $root
+
+# Set up the gpgflags.
+[[ "$keyid" ]] && export gpgflags="--default-key $keyid"
+gpg_cansign $gpgflags || bail "Impossible de trouver la clé GPG appropriée, saut de l'étape de signature."
+
+# Sign everything.
+gpg $gpgflags --detach-sign --armor "$releasedir/$project.$goarch"
+gpg $gpgflags --detach-sign --armor "$releasedir/$project.tar.xz"
+gpg $gpgflags --clear-sign --armor \
+	--output "$releasedir/$project.$hashcmd"{.tmp,} &&
+	mv "$releasedir/$project.$hashcmd"{.tmp,}
